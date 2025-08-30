@@ -193,7 +193,7 @@ if st.button("Run Analysis"):
         folium.CircleMarker(
             location=(row['lat'], row['lon']),
             radius=4,
-            color='green' if row['final_score'] > st.session_state["ranked_locations"]['final_score'].quantile(0.9) else 'none',
+            color='green' if row['final_score'] > st.session_state["ranked_locations"]['final_score'].quantile(0.99) else 'none',
             fill=True,
             fill_opacity=0.6,
             popup=f"Score: {row['final_score']:.2f}"
