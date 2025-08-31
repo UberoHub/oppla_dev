@@ -11,7 +11,7 @@ import time
 from functools import lru_cache
 import json
 
-# Initialize session state (must be at the top)
+# Initialize session state
 if "ranked_locations" not in st.session_state:
     st.session_state["ranked_locations"] = None
 if "map" not in st.session_state:
@@ -22,37 +22,79 @@ if "foursquare_cache" not in st.session_state:
     st.session_state["foursquare_cache"] = {}
 
 # Foursquare API Configuration
-FOURSQUARE_API_KEY = st.secrets.get("FOURSQUARE_API_KEY", "YOUR_API_KEY_HERE")  # Add to secrets.toml
-DAILY_API_LIMIT = 10000
-MAX_CALLS_PER_ANALYSIS = 500  # Conservative limit per analysis run
+FOURSQUARE_API_KEY = st.secrets.get("FOURSQUARE_API_KEY", "YOUR_API_KEY_HERE")
+DAILY_API_LIMIT = 1000
+MAX_CALLS_PER_ANALYSIS = 100
 
-# Foursquare category mapping
-FOURSQUARE_CATEGORIES = {
-    "cafe": "13032",      # Coffee Shop
-    "restaurant": "13065", # Restaurant
-    "shop": "17069",      # Shop & Service
-    "bar": "13003",       # Bar
-    "casino": "10032",    # Casino
-    "cinema": "10017",    # Movie Theater
-    "college": "12013",   # College & Education
-    "fast food": "13145", # Fast Food Restaurant
-    "nightclub": "10032", # Nightclub
-    "pub": "13003",       # Bar/Pub
-    "theatre": "10017",   # Arts & Entertainment
-    "university": "12013", # College & Education
-    "atm": "12020",       # Bank/ATM
-    "music venue": "10017" # Arts & Entertainment
+# Foursquare Dining & Drinking Categories
+DINING_DRINKING_CATEGORIES = [
+    "Dining and Drinking > Bagel Shop",
+    "Dining and Drinking > Bakery",
+    "Dining and Drinking > Bar",
+    "Dining and Drinking > Breakfast Spot",
+    "Dining and Drinking > Brewery",
+    "Dining and Drinking > Cafe, Coffee, and Tea House",
+    "Dining and Drinking > Cafeteria",
+    "Dining and Drinking > Cidery",
+    "Dining and Drinking > Creperie",
+    "Dining and Drinking > Dessert Shop",
+    "Dining and Drinking > Distillery",
+    "Dining and Drinking > Donut Shop",
+    "Dining and Drinking > Food Court",
+    "Dining and Drinking > Food Stand",
+    "Dining and Drinking > Food Truck",
+    "Dining and Drinking > Juice Bar",
+    "Dining and Drinking > Meadery",
+    "Dining and Drinking > Night Market",
+    "Dining and Drinking > Restaurant",
+    "Dining and Drinking > Smoothie Shop",
+    "Dining and Drinking > Snack Place",
+    "Dining and Drinking > Vineyard",
+    "Dining and Drinking > Winery"
+]
+
+# Category groupings for business type selection
+CATEGORY_GROUPS = {
+    "Any Dining & Drinking": DINING_DRINKING_CATEGORIES,
+    "Coffee & Cafe": [
+        "Dining and Drinking > Cafe, Coffee, and Tea House",
+        "Dining and Drinking > Donut Shop",
+        "Dining and Drinking > Bakery",
+        "Dining and Drinking > Breakfast Spot"
+    ],
+    "Restaurant": [
+        "Dining and Drinking > Restaurant",
+        "Dining and Drinking > Food Court",
+        "Dining and Drinking > Cafeteria"
+    ],
+    "Bar & Nightlife": [
+        "Dining and Drinking > Bar",
+        "Dining and Drinking > Brewery",
+        "Dining and Drinking > Distillery",
+        "Dining and Drinking > Winery",
+        "Dining and Drinking > Cidery",
+        "Dining and Drinking > Vineyard",
+        "Dining and Drinking > Meadery"
+    ],
+    "Quick Service": [
+        "Dining and Drinking > Food Stand",
+        "Dining and Drinking > Food Truck",
+        "Dining and Drinking > Snack Place",
+        "Dining and Drinking > Juice Bar",
+        "Dining and Drinking > Smoothie Shop"
+    ],
+    "Dessert & Sweets": [
+        "Dining and Drinking > Dessert Shop",
+        "Dining and Drinking > Bakery",
+        "Dining and Drinking > Creperie"
+    ]
 }
-
-# Debug: Confirm initialization
-st.write("Session state initialized:", "ranked_locations" in st.session_state, "map" in st.session_state)
 
 # App title and description
 st.title("OPPLA \n The app for your optimal places!")
 st.markdown("""
-Select options to find optimal locations for opening a new business in your city.
-Customize the business type, city, and target segment to tune the analysis.
-**✨ Now enhanced with Foursquare Places API for real-time business intelligence!**
+Find optimal locations for dining & drinking businesses using real-time Foursquare data.
+Analyze competition, demographics, metro accessibility, and rental prices.
 """)
 
 # Sidebar for user inputs
@@ -61,51 +103,66 @@ st.sidebar.header("Analysis Parameters")
 # API Status
 if FOURSQUARE_API_KEY and FOURSQUARE_API_KEY != "YOUR_API_KEY_HERE":
     st.sidebar.success("🔗 Foursquare API Connected")
-    st.sidebar.info(f"API calls used today: {st.session_state['foursquare_calls']}")
+    st.sidebar.info(f"API calls used: {st.session_state['foursquare_calls']}")
 else:
-    st.sidebar.error("⚠️ Foursquare API Key needed")
-    st.sidebar.info("Add FOURSQUARE_API_KEY to secrets.toml")
+    st.sidebar.error("⚠️ Add FOURSQUARE_API_KEY to secrets.toml")
 
-# Business Type
-business_types = ["Any", "cafe", "restaurant", "shop", "atm", "bar", "casino", "cinema", "college", "fast food", "gambling", "music venue", "nightclub", "pub", "theatre", "university"]
-business_type = st.sidebar.selectbox("Business Type", business_types, help="Filter POIs by business type")
+# Business Type Selection
+business_types = list(CATEGORY_GROUPS.keys())
+business_type = st.sidebar.selectbox(
+    "Business Type", 
+    business_types, 
+    help="Select the type of dining/drinking business"
+)
 
-# City (Madrid for MVP, extensible for others)
+# City
 cities = ["Madrid"]
-city = st.sidebar.selectbox("City", cities, help="Select the city for analysis")
+city = st.sidebar.selectbox("City", cities)
 
-# Segment: Price and Audience
-price_segment = st.sidebar.radio("Price Segment", ["Low-Cost", "Luxury"], help="Affects real estate scoring")
-audience_segment = st.sidebar.radio("Target Audience", ["Anyone", "Young", "Aged"], help="Affects demographic scoring")
+# Segments
+price_segment = st.sidebar.radio(
+    "Price Segment", 
+    ["Low-Cost", "Luxury"], 
+    help="Affects real estate scoring preference"
+)
+audience_segment = st.sidebar.radio(
+    "Target Audience", 
+    ["Anyone", "Young", "Aged"], 
+    help="Affects demographic scoring"
+)
 
-# Enhanced options with Foursquare
-st.sidebar.subheader("🔥 Foursquare Enhancement")
-use_foursquare = st.sidebar.checkbox("Enable Foursquare Analysis", value=True, 
-                                   help="Use real-time business data from Foursquare")
-foursquare_radius = st.sidebar.slider("Search Radius (meters)", 100, 1000, 300, 
-                                    help="Radius for Foursquare venue search")
+# Analysis Parameters
+st.sidebar.subheader("Search Parameters")
+search_radius = st.sidebar.slider(
+    "Foursquare Search Radius (m)", 
+    200, 1000, 400, 
+    help="Radius for venue search around each grid point"
+)
+competitor_radius = st.sidebar.slider(
+    "Competitor Analysis Radius (m)", 
+    100, 500, 200, 
+    help="Radius for competitor density analysis"
+)
 
-# Optional weight sliders
-st.sidebar.subheader("Adjust Criteria Weights")
-poi_weight = st.sidebar.slider("POI Density Weight", 0.0, 1.0, 0.25)
-demo_weight = st.sidebar.slider("Demographics Weight", 0.0, 1.0, 0.25)
-metro_weight = st.sidebar.slider("Metro Accessibility Weight", 0.0, 1.0, 0.2)
-price_weight = st.sidebar.slider("Real Estate Affordability Weight", 0.0, 1.0, 0.15)
-foursquare_weight = st.sidebar.slider("Foursquare Intelligence Weight", 0.0, 1.0, 0.15)
+# Weight sliders
+st.sidebar.subheader("Criteria Weights")
+competition_weight = st.sidebar.slider("Competition Analysis", 0.0, 1.0, 0.35)
+demo_weight = st.sidebar.slider("Demographics", 0.0, 1.0, 0.25)
+metro_weight = st.sidebar.slider("Metro Accessibility", 0.0, 1.0, 0.25)
+price_weight = st.sidebar.slider("Rental Affordability", 0.0, 1.0, 0.15)
 
-# Normalize weights to sum to 1
-total_weight = poi_weight + demo_weight + metro_weight + price_weight + foursquare_weight
+# Normalize weights
+total_weight = competition_weight + demo_weight + metro_weight + price_weight
 if total_weight > 0:
-    poi_weight /= total_weight
+    competition_weight /= total_weight
     demo_weight /= total_weight
     metro_weight /= total_weight
     price_weight /= total_weight
-    foursquare_weight /= total_weight
 
 # Foursquare API functions
-@lru_cache(maxsize=1000)
-def get_foursquare_venues_cached(lat_lng_str, radius, categories, limit):
-    """Cached Foursquare API call to avoid duplicates"""
+@lru_cache(maxsize=2000)
+def get_foursquare_venues_cached(lat_lng_str, radius, limit):
+    """Get all dining & drinking venues from Foursquare"""
     lat, lng = map(float, lat_lng_str.split(','))
     
     if st.session_state["foursquare_calls"] >= DAILY_API_LIMIT:
@@ -122,370 +179,343 @@ def get_foursquare_venues_cached(lat_lng_str, radius, categories, limit):
         "ll": f"{lat},{lng}",
         "radius": radius,
         "limit": min(limit, 50),
-        "fields": "name,categories,location,stats,popularity,price,rating"
+        "categories": "13000",  # Dining and Drinking category ID
+        "fields": "name,categories,location,fsq_category_labels,popularity,price,rating,stats"
     }
     
-    if categories:
-        params["categories"] = categories
-    
     try:
-        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response = requests.get(url, headers=headers, params=params, timeout=15)
         st.session_state["foursquare_calls"] += 1
         
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # Filter by specific dining & drinking subcategories
+            filtered_results = []
+            for venue in data.get("results", []):
+                fsq_labels = venue.get("fsq_category_labels", [])
+                if any(label in DINING_DRINKING_CATEGORIES for label in fsq_labels):
+                    filtered_results.append(venue)
+            
+            return {"results": filtered_results}
         else:
             return {"results": []}
-    except:
+    except Exception as e:
+        st.error(f"API Error: {e}")
         return {"results": []}
 
-def calculate_foursquare_score(lat, lng, business_type, radius=300):
-    """Calculate comprehensive Foursquare-based score"""
+def analyze_location_competition(lat, lng, target_categories, search_radius, competitor_radius):
+    """Analyze competition and business environment for a location"""
     
-    # Use cache key
-    cache_key = f"{lat:.4f},{lng:.4f},{business_type},{radius}"
+    cache_key = f"{lat:.4f},{lng:.4f},{search_radius},{competitor_radius}"
     if cache_key in st.session_state["foursquare_cache"]:
         return st.session_state["foursquare_cache"][cache_key]
     
-    # Get competitor category
-    competitor_category = FOURSQUARE_CATEGORIES.get(business_type)
-    
-    # 1. Get all venues in area
-    all_venues = get_foursquare_venues_cached(
-        f"{lat},{lng}", radius, None, 50
-    )
-    
-    # 2. Get competitor venues
-    competitor_venues = get_foursquare_venues_cached(
-        f"{lat},{lng}", radius//2, competitor_category, 20
-    ) if competitor_category else {"results": []}
-    
+    # Get all venues in search area
+    all_venues = get_foursquare_venues_cached(f"{lat},{lng}", search_radius, 50)
     venues = all_venues.get("results", [])
-    competitors = competitor_venues.get("results", [])
+    
+    # Get competitors in smaller radius
+    competitor_venues = get_foursquare_venues_cached(f"{lat},{lng}", competitor_radius, 30)
+    competitor_data = competitor_venues.get("results", [])
+    
+    # Filter competitors by target categories
+    direct_competitors = []
+    for venue in competitor_data:
+        venue_labels = venue.get("fsq_category_labels", [])
+        if any(label in target_categories for label in venue_labels):
+            direct_competitors.append(venue)
     
     # Calculate metrics
     total_venues = len(venues)
-    competitor_count = len(competitors)
+    competitor_count = len(direct_competitors)
     
-    # Popularity score (average of all venues)
-    popularity_scores = [v.get("popularity", 0) for v in venues if "popularity" in v]
+    # Popularity analysis
+    popularity_scores = [v.get("popularity", 0) for v in venues if v.get("popularity", 0) > 0]
     avg_popularity = np.mean(popularity_scores) if popularity_scores else 0
     
-    # Price level analysis
-    price_levels = [v.get("price", 2) for v in venues if "price" in v]
-    avg_price = np.mean(price_levels) if price_levels else 2
+    # Price analysis
+    price_levels = [v.get("price", 2) for v in venues if v.get("price")]
+    avg_price_level = np.mean(price_levels) if price_levels else 2
     
     # Rating analysis
-    ratings = [v.get("rating", 0) for v in venues if "rating" in v and v["rating"] > 0]
+    ratings = [v.get("rating", 0) for v in venues if v.get("rating", 0) > 0]
     avg_rating = np.mean(ratings) if ratings else 0
     
-    # Category diversity (complementary businesses)
-    categories = set()
+    # Category diversity
+    all_categories = set()
     for venue in venues:
-        for cat in venue.get("categories", []):
-            categories.add(cat.get("name", ""))
-    category_diversity = len(categories)
+        for label in venue.get("fsq_category_labels", []):
+            all_categories.add(label)
+    category_diversity = len(all_categories)
     
-    # Combined score calculation
-    # Higher venue density and diversity is good
-    # Lower competitor density is good
-    # Higher popularity and ratings are good
-    venue_density_score = min(total_venues / 20, 1.0)  # Normalize to max 20 venues
-    competitor_penalty = max(0, 1 - competitor_count / 10)  # Penalize high competition
-    popularity_score = min(avg_popularity / 100, 1.0)  # Normalize popularity
-    quality_score = min(avg_rating / 10, 1.0)  # Normalize rating
-    diversity_score = min(category_diversity / 15, 1.0)  # Normalize diversity
+    # Competition score (lower competition = higher score)
+    # Optimal competition: some venues for foot traffic, but not too many direct competitors
+    foot_traffic_score = min(total_venues / 30, 1.0)  # Normalize to 30 venues max
+    competition_penalty = max(0, 1 - (competitor_count / 8))  # Penalize >8 direct competitors
     
-    final_score = (
-        venue_density_score * 0.3 +
-        competitor_penalty * 0.2 +
-        popularity_score * 0.2 +
-        quality_score * 0.15 +
-        diversity_score * 0.15
+    # Quality and popularity boost
+    popularity_boost = min(avg_popularity / 80, 1.0)  # Normalize popularity
+    quality_boost = min(avg_rating / 10, 1.0)  # Normalize rating
+    
+    # Final competition score
+    competition_score = (
+        foot_traffic_score * 0.4 +      # Want some nearby venues
+        competition_penalty * 0.3 +      # But not too many competitors
+        popularity_boost * 0.2 +         # High popularity area
+        quality_boost * 0.1              # High quality establishments
     )
     
-    # Cache result
     result = {
-        'score': final_score,
+        'competition_score': competition_score,
         'total_venues': total_venues,
-        'competitors': competitor_count,
+        'direct_competitors': competitor_count,
         'avg_popularity': avg_popularity,
         'avg_rating': avg_rating,
-        'category_diversity': category_diversity
+        'avg_price_level': avg_price_level,
+        'category_diversity': category_diversity,
+        'venue_details': venues[:10]  # Store top 10 venues for details
     }
     
     st.session_state["foursquare_cache"][cache_key] = result
     return result
 
-# Load GeoJSON files (cached)
+# Load static data (demographics, metro, real estate)
 @st.cache_data
-def load_data():
-    pois = gpd.read_file('pois.geojson').to_crs(epsg=4326)
+def load_static_data():
     metro = gpd.read_file('metro_stations.geojson').to_crs(epsg=4326)
     demographics = gpd.read_file('demographics.geojson').to_crs(epsg=4326)
     real_estate = gpd.read_file('real_estate.geojson').to_crs(epsg=4326)
-    return pois, metro, demographics, real_estate
+    return metro, demographics, real_estate
 
-pois, metro, demographics, real_estate = load_data()
+metro, demographics, real_estate = load_static_data()
 
-# City-specific bounding box (Madrid for MVP)
+# City bounds
 city_bounds = {
     "Madrid": {"min_lon": -3.8, "max_lon": -3.5, "min_lat": 40.3, "max_lat": 40.5}
 }
 
-# Function to perform Enhanced MCA (cached)
+# Main analysis function
 @st.cache_data
-def run_enhanced_mca(_pois, _metro, _demographics, _real_estate, business_type, price_segment, 
-                    audience_segment, weights, _city, use_foursquare, foursquare_radius):
-    # Grid setup
+def run_foursquare_analysis(_metro, _demographics, _real_estate, business_type, 
+                          price_segment, audience_segment, weights, _city, 
+                          search_radius, competitor_radius):
+    
+    # Create analysis grid
     min_lon, max_lon = city_bounds[_city]["min_lon"], city_bounds[_city]["max_lon"]
     min_lat, max_lat = city_bounds[_city]["min_lat"], city_bounds[_city]["max_lat"]
-    grid_size = 0.01  # Larger grid to reduce API calls (approx 1km)
+    grid_size = 0.008  # Approximately 800m grid
 
-    grid_cells = []
-    grid_centroids = []
+    grid_points = []
     for lon in np.arange(min_lon, max_lon, grid_size):
         for lat in np.arange(min_lat, max_lat, grid_size):
-            cell = box(lon, lat, lon + grid_size, lat + grid_size)
-            centroid = Point(lon + grid_size / 2, lat + grid_size / 2)
-            grid_cells.append(cell)
-            grid_centroids.append({'geometry': centroid, 'lon': centroid.x, 'lat': centroid.y})
+            center_lon = lon + grid_size / 2
+            center_lat = lat + grid_size / 2
+            grid_points.append({'lon': center_lon, 'lat': center_lat})
 
-    grid_gdf = gpd.GeoDataFrame(grid_centroids, geometry='geometry', crs='EPSG:4326')
-    grid_cells_gdf = gpd.GeoDataFrame(geometry=grid_cells, crs='EPSG:4326')
-
-    # Limit grid size for API calls
-    if len(grid_gdf) > MAX_CALLS_PER_ANALYSIS and use_foursquare:
-        # Sample grid points to stay within API limits
-        sample_size = min(MAX_CALLS_PER_ANALYSIS, len(grid_gdf))
-        sample_indices = np.random.choice(len(grid_gdf), sample_size, replace=False)
-        grid_gdf = grid_gdf.iloc[sample_indices].reset_index(drop=True)
-        grid_cells_gdf = grid_cells_gdf.iloc[sample_indices].reset_index(drop=True)
-
-    # Filter POIs by business type
-    if business_type != "Any":
-        poi_categories = {
-            "cafe": ["cafe", "coffee"],
-            "restaurant": ["restaurant", "food"],
-            "shop": ["shop", "retail"],
-            "atm": ["atm"],
-            "bar": ["bar"],
-            "casino": ["casino"],
-            "cinema": ["cinema"],
-            "college": ["college"],
-            "fast food": ["fast_food"],
-            "gambling": ["gambling"],
-            "music venue": ["music_venue"],
-            "nightclub": ["nightclub"],
-            "pub": ["pub"],
-            "theatre": ["theatre"],
-            "university": ["university"]
-        }
-        categories = poi_categories.get(business_type, [business_type])
-        if 'type' in _pois.columns:
-            _pois = _pois[_pois['type'].isin(categories)]
-        else:
-            st.warning(f"Column 'type' not found in POIs dataset. Using all POIs.")
-
-    # Score each criterion
-    scores = []
+    # Limit grid size for API efficiency
+    if len(grid_points) > MAX_CALLS_PER_ANALYSIS:
+        sample_indices = np.random.choice(len(grid_points), MAX_CALLS_PER_ANALYSIS, replace=False)
+        grid_points = [grid_points[i] for i in sample_indices]
+    
+    st.info(f"Analyzing {len(grid_points)} locations...")
+    
+    # Get target categories for selected business type
+    target_categories = CATEGORY_GROUPS[business_type]
+    
+    # Analyze each location
+    results = []
     progress_bar = st.progress(0)
     
-    for idx, centroid in grid_gdf.iterrows():
-        progress_bar.progress((idx + 1) / len(grid_gdf))
+    for idx, point in enumerate(grid_points):
+        progress_bar.progress((idx + 1) / len(grid_points))
         
-        cell = grid_cells_gdf.iloc[idx].geometry
-        centroid_point = centroid.geometry
-
-        # POI Density
-        poi_count = len(_pois[_pois.geometry.within(cell)])
-
-        # Demographics: Adjust based on audience segment
+        lat, lon = point['lat'], point['lon']
+        centroid_point = Point(lon, lat)
+        
+        # 1. Competition Analysis (Foursquare)
+        competition_data = analyze_location_competition(
+            lat, lon, target_categories, search_radius, competitor_radius
+        )
+        
+        # 2. Demographics
         demo_match = _demographics[_demographics.geometry.contains(centroid_point)]
         if not demo_match.empty:
             if audience_segment == "Young":
-                demo_score = demo_match.get('young_population', demo_match['young_pop_dens']).iloc[0]
+                demo_score = demo_match.get('young_population', demo_match.get('young_pop_dens', 0)).iloc[0]
             elif audience_segment == "Aged":
-                demo_score = demo_match.get('aged_population', demo_match['old_pop_dens']).iloc[0]
+                demo_score = demo_match.get('aged_population', demo_match.get('old_pop_dens', 0)).iloc[0]
             else:
                 demo_score = demo_match['total_pop_density'].iloc[0]
         else:
             demo_score = _demographics['total_pop_density'].mean()
-
-        # Metro Accessibility
+        
+        # 3. Metro Accessibility
         min_distance = _metro.geometry.distance(centroid_point).min()
-        metro_score = 1 / (1 + min_distance)
-
-        # Real Estate: Adjust based on price segment
+        metro_score = 1 / (1 + min_distance * 100)  # Convert to more reasonable scale
+        
+        # 4. Real Estate
         price_match = _real_estate[_real_estate.geometry.contains(centroid_point)]
-        price = price_match['sqm_rental'].iloc[0] if not price_match.empty else _real_estate['sqm_rental'].mean()
-        price_score = 1 / price if price_segment == "Low-Cost" else price
-
-        # Foursquare Score
-        foursquare_data = {'score': 0, 'total_venues': 0, 'competitors': 0, 
-                          'avg_popularity': 0, 'avg_rating': 0, 'category_diversity': 0}
-        if use_foursquare and FOURSQUARE_API_KEY != "YOUR_API_KEY_HERE":
-            foursquare_data = calculate_foursquare_score(
-                centroid.lat, centroid.lon, business_type, foursquare_radius
-            )
-            # Small delay to respect rate limits
-            time.sleep(0.1)
-
-        scores.append({
-            'lon': centroid.lon,
-            'lat': centroid.lat,
-            'poi_score': poi_count,
+        if not price_match.empty:
+            rental_price = price_match['sqm_rental'].iloc[0]
+        else:
+            rental_price = _real_estate['sqm_rental'].mean()
+        
+        price_score = 1 / rental_price if price_segment == "Low-Cost" else rental_price / 100
+        
+        results.append({
+            'lon': lon,
+            'lat': lat,
+            'competition_score': competition_data['competition_score'],
             'demo_score': demo_score,
             'metro_score': metro_score,
             'price_score': price_score,
-            'foursquare_score': foursquare_data['score'],
-            'fs_venues': foursquare_data['total_venues'],
-            'fs_competitors': foursquare_data['competitors'],
-            'fs_popularity': foursquare_data['avg_popularity'],
-            'fs_rating': foursquare_data['avg_rating'],
-            'fs_diversity': foursquare_data['category_diversity']
+            'total_venues': competition_data['total_venues'],
+            'direct_competitors': competition_data['direct_competitors'],
+            'avg_popularity': competition_data['avg_popularity'],
+            'avg_rating': competition_data['avg_rating'],
+            'category_diversity': competition_data['category_diversity'],
+            'rental_price': rental_price
         })
-
+        
+        # Rate limiting
+        time.sleep(0.05)
+    
     progress_bar.progress(1.0)
     progress_bar.empty()
-
+    
+    # Normalize and calculate final scores
+    results_df = pd.DataFrame(results)
+    
     # Normalize scores
-    scores_df = pd.DataFrame(scores)
     scaler = MinMaxScaler()
-    score_columns = ['poi_score', 'demo_score', 'metro_score', 'price_score', 'foursquare_score']
-    normalized_scores = scaler.fit_transform(scores_df[score_columns])
-    scores_df[score_columns] = normalized_scores
-
-    # Weighted sum
-    scores_df['final_score'] = (
-        weights['poi'] * scores_df['poi_score'] +
-        weights['demo'] * scores_df['demo_score'] +
-        weights['metro'] * scores_df['metro_score'] +
-        weights['price'] * scores_df['price_score'] +
-        weights['foursquare'] * scores_df['foursquare_score']
+    score_columns = ['competition_score', 'demo_score', 'metro_score', 'price_score']
+    results_df[score_columns] = scaler.fit_transform(results_df[score_columns])
+    
+    # Calculate weighted final score
+    results_df['final_score'] = (
+        weights['competition'] * results_df['competition_score'] +
+        weights['demo'] * results_df['demo_score'] +
+        weights['metro'] * results_df['metro_score'] +
+        weights['price'] * results_df['price_score']
     )
+    
+    return results_df.sort_values('final_score', ascending=False)
 
-    return scores_df.sort_values(by='final_score', ascending=False)
+# UI Controls
+col1, col2 = st.columns(2)
 
-# Clear results button
-if st.button("Clear Results"):
-    st.session_state["ranked_locations"] = None
-    st.session_state["map"] = None
-    st.rerun()
-
-# Run analysis
-if st.button("🚀 Run Enhanced Analysis"):
-    if use_foursquare and (not FOURSQUARE_API_KEY or FOURSQUARE_API_KEY == "YOUR_API_KEY_HERE"):
-        st.error("Please add your Foursquare API key to secrets.toml to use Foursquare features")
-    else:
-        weights = {
-            'poi': poi_weight, 
-            'demo': demo_weight, 
-            'metro': metro_weight, 
-            'price': price_weight,
-            'foursquare': foursquare_weight
-        }
-        
-        # Run Enhanced MCA and store results
-        with st.spinner("Running enhanced analysis with Foursquare data..."):
-            st.session_state["ranked_locations"] = run_enhanced_mca(
-                pois, metro, demographics, real_estate, business_type, 
-                price_segment, audience_segment, weights, city, 
-                use_foursquare, foursquare_radius
-            )
-
-        # Create enhanced Folium map
-        m = folium.Map(location=(40.40, -3.65), zoom_start=11, tiles="CartoDB positron")
-        
-        top_locations = st.session_state["ranked_locations"].head(20)  # Show top 20
-        
-        for _, row in top_locations.iterrows():
-            # Color coding based on score percentile
-            if row['final_score'] > st.session_state["ranked_locations"]['final_score'].quantile(0.95):
-                color = 'darkgreen'
-                radius = 8
-            elif row['final_score'] > st.session_state["ranked_locations"]['final_score'].quantile(0.80):
-                color = 'green'
-                radius = 6
-            else:
-                color = 'lightgreen'
-                radius = 4
+with col1:
+    if st.button("🚀 Run Analysis", use_container_width=True):
+        if not FOURSQUARE_API_KEY or FOURSQUARE_API_KEY == "YOUR_API_KEY_HERE":
+            st.error("Please add FOURSQUARE_API_KEY to secrets.toml")
+        else:
+            weights = {
+                'competition': competition_weight,
+                'demo': demo_weight,
+                'metro': metro_weight,
+                'price': price_weight
+            }
+            
+            with st.spinner("Analyzing locations with Foursquare data..."):
+                st.session_state["ranked_locations"] = run_foursquare_analysis(
+                    metro, demographics, real_estate, business_type,
+                    price_segment, audience_segment, weights, city,
+                    search_radius, competitor_radius
+                )
+            
+            # Create map
+            results = st.session_state["ranked_locations"]
+            m = folium.Map(location=(40.40, -3.65), zoom_start=11, tiles="CartoDB positron")
+            
+            # Add top 30 locations to map
+            top_locations = results.head(30)
+            
+            for _, row in top_locations.iterrows():
+                # Color by score percentile
+                score_percentile = (row['final_score'] - results['final_score'].min()) / (results['final_score'].max() - results['final_score'].min())
                 
-            # Enhanced popup with Foursquare data
-            popup_text = f"""
-            <b>Overall Score: {row['final_score']:.3f}</b><br>
-            📍 Location: {row['lat']:.4f}, {row['lon']:.4f}<br>
-            🏢 Nearby Venues: {row['fs_venues']}<br>
-            🏪 Competitors: {row['fs_competitors']}<br>
-            ⭐ Avg Rating: {row['fs_rating']:.1f}<br>
-            📊 Popularity: {row['fs_popularity']:.1f}<br>
-            🎯 Diversity: {row['fs_diversity']} categories
-            """
+                if score_percentile > 0.9:
+                    color, radius = 'darkgreen', 10
+                elif score_percentile > 0.7:
+                    color, radius = 'green', 8
+                elif score_percentile > 0.5:
+                    color, radius = 'orange', 6
+                else:
+                    color, radius = 'red', 4
+                
+                popup_html = f"""
+                <div style="width:250px">
+                <b>Score: {row['final_score']:.3f}</b><br>
+                📍 {row['lat']:.4f}, {row['lon']:.4f}<br>
+                🏪 Total Venues: {row['total_venues']}<br>
+                🎯 Direct Competitors: {row['direct_competitors']}<br>
+                ⭐ Avg Rating: {row['avg_rating']:.1f}/10<br>
+                📊 Popularity: {row['avg_popularity']:.0f}<br>
+                💰 Rent: €{row['rental_price']:.0f}/m²<br>
+                🎨 Categories: {row['category_diversity']}
+                </div>
+                """
+                
+                folium.CircleMarker(
+                    location=(row['lat'], row['lon']),
+                    radius=radius,
+                    color=color,
+                    fill=True,
+                    fillOpacity=0.7,
+                    popup=folium.Popup(popup_html, max_width=300)
+                ).add_to(m)
             
-            folium.CircleMarker(
-                location=(row['lat'], row['lon']),
-                radius=radius,
-                color=color,
-                fill=True,
-                fill_opacity=0.7,
-                popup=folium.Popup(popup_text, max_width=300)
-            ).add_to(m)
-            
-        st.session_state["map"] = m
+            st.session_state["map"] = m
+            st.success(f"Analysis complete! Found {len(results)} locations.")
 
-# Display results if available
+with col2:
+    if st.button("🗑️ Clear Results", use_container_width=True):
+        st.session_state["ranked_locations"] = None
+        st.session_state["map"] = None
+        st.rerun()
+
+# Display results
 if st.session_state.get("ranked_locations") is not None:
-    st.subheader("🎯 Top Optimal Locations")
+    results = st.session_state["ranked_locations"]
     
-    # Enhanced results display
-    top_results = st.session_state["ranked_locations"].head(10)
+    st.subheader("🎯 Top Locations for " + business_type)
     
-    # Create display columns
-    display_columns = ['lon', 'lat', 'final_score', 'fs_venues', 'fs_competitors', 
-                      'fs_popularity', 'fs_rating', 'fs_diversity']
-    column_names = ['Longitude', 'Latitude', 'Final Score', 'Nearby Venues', 
-                   'Competitors', 'Popularity', 'Avg Rating', 'Category Diversity']
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Locations Analyzed", len(results))
+    with col2:
+        avg_competitors = results['direct_competitors'].mean()
+        st.metric("Avg Competitors", f"{avg_competitors:.1f}")
+    with col3:
+        avg_venues = results['total_venues'].mean()
+        st.metric("Avg Total Venues", f"{avg_venues:.1f}")
+    with col4:
+        st.metric("API Calls Used", st.session_state['foursquare_calls'])
     
-    display_df = top_results[display_columns].copy()
-    display_df.columns = column_names
-    display_df = display_df.round(3)
+    # Top results table
+    top_10 = results.head(10)[['lon', 'lat', 'final_score', 'total_venues', 'direct_competitors', 
+                              'avg_rating', 'avg_popularity', 'rental_price']].round(3)
     
-    st.dataframe(display_df, use_container_width=True)
+    top_10.columns = ['Longitude', 'Latitude', 'Final Score', 'Total Venues', 
+                     'Direct Competitors', 'Avg Rating', 'Popularity', 'Rent €/m²']
     
-    # Key insights
-    if use_foursquare:
-        st.subheader("📊 Foursquare Insights")
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            avg_venues = top_results['fs_venues'].mean()
-            st.metric("Avg Nearby Venues", f"{avg_venues:.1f}")
-        
-        with col2:
-            avg_competitors = top_results['fs_competitors'].mean()
-            st.metric("Avg Competitors", f"{avg_competitors:.1f}")
-            
-        with col3:
-            avg_rating = top_results['fs_rating'].mean()
-            st.metric("Area Avg Rating", f"{avg_rating:.1f}")
-            
-        with col4:
-            total_api_calls = st.session_state["foursquare_calls"]
-            st.metric("API Calls Used", f"{total_api_calls}")
-
-    # Display map
-    if st.session_state.get("map") is not None:
+    st.dataframe(top_10, use_container_width=True)
+    
+    # Map
+    if st.session_state.get("map"):
         st.subheader("📍 Location Map")
-        st_folium(st.session_state["map"], width=700, height=500, key="folium_map")
-
-    # Enhanced download with Foursquare data
+        st_folium(st.session_state["map"], width=700, height=500)
+    
+    # Download
     st.download_button(
-        label="📥 Download Enhanced Results",
-        data=st.session_state["ranked_locations"].to_csv(index=False),
-        file_name=f"oppla_enhanced_results_{business_type}_{city}.csv",
-        mime="text/csv"
+        label="📥 Download Results",
+        data=results.to_csv(index=False),
+        file_name=f"oppla_foursquare_{business_type.lower().replace(' ', '_')}_{city}.csv",
+        mime="text/csv",
+        use_container_width=True
     )
 
 # Footer
 st.markdown("---")
-st.markdown("**OPPLA** - Powered by spatial analysis and Foursquare Places API 🚀")
+st.markdown("**OPPLA** - Location Intelligence powered by Foursquare Places API 🚀")
