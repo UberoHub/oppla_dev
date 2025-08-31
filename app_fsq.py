@@ -22,7 +22,7 @@ if "foursquare_cache" not in st.session_state:
     st.session_state["foursquare_cache"] = {}
 
 # Foursquare API Configuration
-FOURSQUARE_API_KEY = st.secrets.get("FOURSQUARE_API_KEY", "YOUR_API_KEY_HERE")
+FOURSQUARE_API_KEY = "2M0MK1J3BJSIGVJTIRXY0352J3CB1U3R1UZZ3C3A2J14UCJS"
 DAILY_API_LIMIT = 1000
 MAX_CALLS_PER_ANALYSIS = 100
 
@@ -105,7 +105,7 @@ if FOURSQUARE_API_KEY and FOURSQUARE_API_KEY != "YOUR_API_KEY_HERE":
     st.sidebar.success("🔗 Foursquare API Connected")
     st.sidebar.info(f"API calls used: {st.session_state['foursquare_calls']}")
 else:
-    st.sidebar.error("⚠️ Add FOURSQUARE_API_KEY to secrets.toml")
+    st.sidebar.error("⚠️ Wrong FOURSQUARE_API_KEY")
 
 # Business Type Selection
 business_types = list(CATEGORY_GROUPS.keys())
