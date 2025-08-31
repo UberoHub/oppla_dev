@@ -9,5 +9,4 @@ folium
 streamlit_folium
 pandas
 requests
-time
 json
