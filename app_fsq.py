@@ -22,7 +22,7 @@ if "foursquare_cache" not in st.session_state:
     st.session_state["foursquare_cache"] = {}
 
 # Foursquare API Configuration
-FOURSQUARE_API_KEY = "2M0MK1J3BJSIGVJTIRXY0352J3CB1U3R1UZZ3C3A2J14UCJS"
+FOURSQUARE_API_KEY = "redacted"
 DAILY_API_LIMIT = 1000
 MAX_CALLS_PER_ANALYSIS = 100
 
